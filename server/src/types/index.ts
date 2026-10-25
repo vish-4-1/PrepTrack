@@ -24,6 +24,23 @@ export interface NormalizedCodingStats {
   contestsParticipated: number;
 }
 
+export interface AnalyzedRepo {
+  name: string;
+  description: string;
+  repoUrl: string;
+  stars: number;
+  forks: number;
+  language: string;
+  commitCount: number;
+  sizeKb?: number;
+  hasTests: boolean;
+  hasCiCd: boolean;
+  hasDocker: boolean;
+  architectureTier: 'Basic CRUD' | 'Full-Stack Production' | 'Advanced System';
+  difficultyScore: number; // 1.0 - 10.0
+  signals?: string[];
+}
+
 export interface NormalizedDevStats {
   totalRepos: number;
   publicRepos: number;
@@ -33,15 +50,7 @@ export interface NormalizedDevStats {
   prCount: number;
   issueCount: number;
   languages: Record<string, number>;
-  topRepos: Array<{
-    name: string;
-    description: string;
-    repoUrl: string;
-    stars: number;
-    forks: number;
-    language: string;
-    commitCount: number;
-  }>;
+  topRepos: AnalyzedRepo[];
 }
 
 export interface NormalizedStudentProfile {
@@ -102,3 +111,20 @@ export interface GrokAnalysisResponse {
   learningTopics: string[];
   companySpecificInsights?: Record<string, string>;
 }
+
+export interface ParsedResumeResult {
+  extractedSkills: string[];
+  extractedProjects: Array<{
+    name: string;
+    description: string;
+    technologies: string[];
+    architectureTier: 'Basic CRUD' | 'Full-Stack Production' | 'Advanced System';
+    difficultyScore: number;
+    hasTests: boolean;
+    hasCiCd: boolean;
+    hasDocker: boolean;
+  }>;
+  experienceSummary: string;
+  placementReadiness: number;
+}
+

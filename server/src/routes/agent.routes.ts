@@ -29,6 +29,23 @@ router.post('/chat', authenticateToken, async (req: AuthenticatedRequest, res) =
   }
 });
 
+// GET /api/agent/session - Get persistent chat messages and latest state
+router.get('/session', authenticateToken, async (req: AuthenticatedRequest, res) => {
+  try {
+    const studentProfileId = req.user?.studentProfileId;
+    if (!studentProfileId) {
+      return res.status(404).json({ error: 'Student profile not found' });
+    }
+
+    const messages = await agentService.getChatMessages(studentProfileId);
+    const plan = await agentService.getActivePlan(studentProfileId);
+
+    return res.json({ messages, plan });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Failed to retrieve agent session' });
+  }
+});
+
 // GET /api/agent/history - Get past agent chat sessions
 router.get('/history', authenticateToken, async (req: AuthenticatedRequest, res) => {
   try {

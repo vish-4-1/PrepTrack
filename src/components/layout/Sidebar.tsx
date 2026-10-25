@@ -9,24 +9,17 @@ import {
   Building2,
   Sparkles,
   Bot,
+  ShieldAlert,
 } from 'lucide-react';
-
+import { env } from '../../config/env';
 
 interface SidebarProps {
-  isDemoMode: boolean;
-  onToggleDemoMode: () => void;
-  isAdminMode: boolean;
-  onToggleAdminMode: () => void;
+  isAdminMode?: boolean;
+  onToggleAdminMode?: () => void;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({
-  isDemoMode,
-  onToggleDemoMode,
-  isAdminMode,
-  onToggleAdminMode,
-}) => {
+export const Sidebar: React.FC<SidebarProps> = ({ isAdminMode, onToggleAdminMode }) => {
   const navItems = [
-
     { label: 'Dashboard', icon: LayoutDashboard, path: '/' },
     { label: 'AI Placement Coach', icon: Bot, path: '/coach' },
     { label: 'Build Your Profile', icon: UserCheck, path: '/onboarding' },
@@ -34,9 +27,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { label: 'Action Center', icon: CheckSquare, path: '/actions' },
     { label: 'Build Next', icon: Code2, path: '/build-next' },
     { label: 'Target Companies', icon: Building2, path: '/companies' },
+    { label: 'Admin Portal', icon: ShieldAlert, path: '/admin' },
   ];
-
-
 
   return (
     <aside className="w-64 bg-[#FFFFFF] border-r border-[#E5E7EB] flex flex-col justify-between shrink-0 select-none shadow-sm">
@@ -47,7 +39,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             PT
           </div>
           <div>
-            <h1 className="font-bold text-[#1F2937] tracking-tight text-base leading-none">PrepTrack</h1>
+            <h1 className="font-bold text-[#1F2937] tracking-tight text-base leading-none">{env.VITE_APP_NAME}</h1>
             <p className="text-[11px] text-[#6B7280] font-mono mt-0.5">Career Intelligence</p>
           </div>
         </div>
@@ -79,15 +71,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </nav>
       </div>
 
-      {/* Mode Switcher Footer */}
+      {/* Footer Info */}
       <div className="p-3 border-t border-[#E5E7EB] bg-[#F8F9FA] space-y-2">
         <div className="bg-[#FFFFFF] p-2.5 rounded border border-[#E5E7EB] text-[11px] font-mono text-[#6B7280] flex items-center justify-between shadow-xs">
           <span className="flex items-center space-x-1.5">
             <Sparkles className="w-3.5 h-3.5 text-[#374151]" />
-            <span>AI Provider</span>
+            <span>AI Reasoning</span>
           </span>
           <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-100 text-emerald-800 border border-emerald-300">
-            Groq Llama-3.3
+            Active
           </span>
         </div>
       </div>

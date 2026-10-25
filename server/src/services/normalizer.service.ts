@@ -3,7 +3,7 @@ import { LeetCodeConnector } from '../connectors/LeetCodeConnector';
 import { CodeChefConnector } from '../connectors/CodeChefConnector';
 import { HackerRankConnector } from '../connectors/HackerRankConnector';
 import { LinkedInConnector } from '../connectors/LinkedInConnector';
-import { NormalizedCodingStats, NormalizedDevStats, PlatformName } from '../types';
+import { NormalizedCodingStats, PlatformName, ConnectorResponse } from '../types';
 
 export class NormalizerService {
   private githubConnector = new GitHubConnector();
@@ -29,20 +29,36 @@ export class NormalizerService {
     }
   }
 
-  async syncPlatform(platform: PlatformName, url: string) {
-    switch (platform) {
-      case 'GITHUB':
-        return this.githubConnector.fetchProfile(url);
-      case 'LEETCODE':
-        return this.leetcodeConnector.fetchProfile(url);
-      case 'CODECHEF':
-        return this.codechefConnector.fetchProfile(url);
-      case 'HACKERRANK':
-        return this.hackerrankConnector.fetchProfile(url);
-      case 'LINKEDIN':
-        return this.linkedinConnector.fetchProfile(url);
-      default:
-        throw new Error(`Unsupported platform ${platform}`);
+  async syncPlatform(platform: PlatformName, url: string): Promise<ConnectorResponse> {
+    try {
+      switch (platform) {
+        case 'GITHUB':
+          return await this.githubConnector.fetchProfile(url);
+        case 'LEETCODE':
+          return await this.leetcodeConnector.fetchProfile(url);
+        case 'CODECHEF':
+          return await this.codechefConnector.fetchProfile(url);
+        case 'HACKERRANK':
+          return await this.hackerrankConnector.fetchProfile(url);
+        case 'LINKEDIN':
+          return await this.linkedinConnector.fetchProfile(url);
+        default:
+          return {
+            success: false,
+            platform,
+            rawProfileUrl: url,
+            error: `Unsupported platform ${platform}`,
+            isPublicDataOnly: true,
+          };
+      }
+    } catch (err: any) {
+      return {
+        success: false,
+        platform,
+        rawProfileUrl: url,
+        error: err.message || 'Platform synchronization failed',
+        isPublicDataOnly: true,
+      };
     }
   }
 

@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
+import { env } from '../config/env';
 
 export interface AuthenticatedRequest extends Request {
   user?: {
@@ -8,19 +9,6 @@ export interface AuthenticatedRequest extends Request {
     role: string;
     studentProfileId?: string;
   };
-}
-
-const DEFAULT_SECRET = 'preptrack-placement-secret-key-2026';
-
-function getJwtSecret(): string {
-  const secret = process.env.JWT_SECRET;
-  if (!secret) {
-    if (process.env.NODE_ENV === 'production') {
-      throw new Error('FATAL: JWT_SECRET environment variable must be set in production');
-    }
-    return DEFAULT_SECRET;
-  }
-  return secret;
 }
 
 export function authenticateToken(req: AuthenticatedRequest, res: Response, next: NextFunction) {
@@ -32,11 +20,10 @@ export function authenticateToken(req: AuthenticatedRequest, res: Response, next
   }
 
   try {
-    const secret = getJwtSecret();
-    const decoded = jwt.verify(token, secret) as any;
+    const decoded = jwt.verify(token, env.JWT_SECRET) as any;
     req.user = decoded;
     next();
-  } catch (err) {
+  } catch {
     return res.status(403).json({ error: 'Invalid or expired token' });
   }
 }
@@ -47,4 +34,3 @@ export function requireAdmin(req: AuthenticatedRequest, res: Response, next: Nex
   }
   next();
 }
-

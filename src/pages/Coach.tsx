@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Bot,
   Send,
@@ -13,7 +13,7 @@ import {
   Award,
 } from 'lucide-react';
 import { StudentProfile, AgentChatMessage, LearningPlan } from '../types';
-import { api } from '../services/api';
+import { agentApi } from '../services/api';
 import { Badge } from '../components/ui/Badge';
 
 interface CoachProps {
@@ -26,7 +26,7 @@ export const Coach: React.FC<CoachProps> = ({ profile, onRefreshProfile }) => {
     {
       id: 'welcome-1',
       sender: 'agent',
-      text: `### 🤖 Welcome to your AI Placement Coach!\n\nI monitor your public telemetry and deterministic skill scores across **DSA**, **Development**, **DBMS**, and **System Architecture**.\n\nAsk me anything about your placement preparation, company benchmarks, or week-by-week strategy!`,
+      text: `### 🤖 Welcome to your AI Placement Coach!\n\nI monitor your verified telemetry and deterministic skill scores across **DSA**, **Development**, **DBMS**, and **System Architecture**.\n\nAsk me anything about your placement preparation, company benchmarks, or week-by-week strategy!`,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     },
   ]);
@@ -36,6 +36,33 @@ export const Coach: React.FC<CoachProps> = ({ profile, onRefreshProfile }) => {
   const [activePlan, setActivePlan] = useState<LearningPlan | null>(null);
   const [planApplied, setPlanApplied] = useState(false);
   const [appliedCount, setAppliedCount] = useState(0);
+
+  useEffect(() => {
+    const loadSessionHistory = async () => {
+      try {
+        const session = await agentApi.getSession();
+        if (session?.messages && session.messages.length > 0) {
+          const loaded: AgentChatMessage[] = session.messages.map((m: any) => ({
+            id: m.id || `msg-${Date.now()}-${Math.random()}`,
+            sender: m.role === 'user' ? 'user' : 'agent',
+            text: m.content || '',
+            toolCalls: m.toolCallsJson ? JSON.parse(m.toolCallsJson) : undefined,
+            timestamp: m.createdAt
+              ? new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+              : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          }));
+          setMessages(loaded);
+        }
+        if (session?.plan) {
+          setActivePlan(session.plan);
+        }
+      } catch (err) {
+        console.warn('Could not load persistent agent session history:', err);
+      }
+    };
+
+    loadSessionHistory();
+  }, []);
 
   const quickPrompts = [
     '🎯 What should I focus on this week?',
@@ -62,13 +89,12 @@ export const Coach: React.FC<CoachProps> = ({ profile, onRefreshProfile }) => {
     setPlanApplied(false);
 
     try {
-      const res = await api.post('/agent/chat', { message });
-      const data = res.data;
+      const data = await agentApi.chat(message);
 
       const agentMsg: AgentChatMessage = {
         id: `agent-${Date.now()}`,
         sender: 'agent',
-        text: data.message || 'Analysis complete.',
+        text: data.message || 'Strategic assessment completed.',
         toolCalls: data.toolCalls,
         plan: data.plan,
         actions: data.actions,
@@ -82,45 +108,14 @@ export const Coach: React.FC<CoachProps> = ({ profile, onRefreshProfile }) => {
       if (message.includes('Refresh') && onRefreshProfile) {
         onRefreshProfile();
       }
-    } catch {
-      // Offline fallback simulation
-      setTimeout(() => {
-        const fallbackMsg: AgentChatMessage = {
-          id: `agent-${Date.now()}`,
-          sender: 'agent',
-          text: `### 🎯 Strategic Assessment & Weekly Roadmap\n\nBased on your verified profile metrics:\n- **Placement Readiness Index**: **${profile?.placementReadiness || 74}/100**\n- **DSA Mastery**: **82/100**\n- **Primary Growth Area**: **DBMS & System Indexing** (68/100)\n\nI have structured a **7-Day Plan** targeting your highest-impact topics for placement rounds. Check the interactive plan on the right to start!`,
-          toolCalls: [
-            { toolName: 'get_student_profile', description: 'Retrieved student identity and target role', success: true },
-            { toolName: 'get_skill_scores', description: 'Calculated deterministic skill scores', success: true },
-            { toolName: 'get_skill_history', description: 'Evaluated historical progression trends', success: true },
-            { toolName: 'create_learning_plan', description: 'Generated structured 7-day daily plan', success: true },
-          ],
-          plan: {
-            goal: 'Prepare for software engineering placements',
-            targetRole: 'Software Development Engineer',
-            durationDays: 7,
-            priorities: [
-              { skill: 'DBMS & SQL', priority: 'HIGH', reason: 'Current DBMS score is 14 pts below DSA' },
-              { skill: 'DSA Practice', priority: 'MEDIUM', reason: 'Maintain daily dynamic programming consistency' },
-            ],
-            dailyPlan: [
-              { day: 1, focusArea: 'DBMS Theory', tasks: ['Study B-Tree indexing & Normalization (1NF-BCNF)', 'Solve 5 SQL query problems'], estimatedHours: 2 },
-              { day: 2, focusArea: 'SQL & Transactions', tasks: ['Practice Complex Subqueries and JOINs on LeetCode', 'Review ACID transaction isolation levels'], estimatedHours: 3 },
-              { day: 3, focusArea: 'DSA Mastery', tasks: ['Solve 2 Medium DP problems (Knapsack / LCS)', 'Write clean complexity analysis'], estimatedHours: 2 },
-              { day: 4, focusArea: 'System Architecture', tasks: ['Study Redis caching patterns and eviction policies', 'Review database sharding vs replication'], estimatedHours: 3 },
-              { day: 5, focusArea: 'Operating Systems', tasks: ['Review Process synchronization & Deadlock prevention', 'Prepare behavioral interview stories (STAR method)'], estimatedHours: 2 },
-              { day: 6, focusArea: 'Mock Interview', tasks: ['Conduct 1 timed technical mock interview', 'Review runtime trade-offs under pressure'], estimatedHours: 2 },
-              { day: 7, focusArea: 'Weekly Review', tasks: ['Re-test SQL concepts and sync GitHub telemetry', 'Evaluate weekly skill score improvement'], estimatedHours: 1 },
-            ],
-            milestones: ['Close DBMS deficit', 'Complete 1 timed mock technical round', 'Re-sync telemetry'],
-            expectedOutcome: 'Elevate verified PRI score to 80+ for campus drives',
-          },
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        };
-
-        setMessages((prev) => [...prev, fallbackMsg]);
-        if (fallbackMsg.plan) setActivePlan(fallbackMsg.plan);
-      }, 1000);
+    } catch (err: any) {
+      const errorMsg: AgentChatMessage = {
+        id: `agent-${Date.now()}`,
+        sender: 'agent',
+        text: `Unable to complete agent consultation: ${err.response?.data?.error || err.message || 'Backend agent service unreachable'}. Please ensure the server is active.`,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      };
+      setMessages((prev) => [...prev, errorMsg]);
     } finally {
       setIsLoading(false);
     }
@@ -129,14 +124,21 @@ export const Coach: React.FC<CoachProps> = ({ profile, onRefreshProfile }) => {
   const handleApplyPlan = async () => {
     if (!activePlan) return;
     try {
-      const res = await api.post('/agent/plan/apply', { plan: activePlan });
+      const res = await agentApi.applyPlan(activePlan);
       setPlanApplied(true);
-      setAppliedCount(res.data?.tasksCreated || 7);
-    } catch {
-      setPlanApplied(true);
-      setAppliedCount(7);
+      setAppliedCount(res.count || res.tasksCreated || 0);
+      if (onRefreshProfile) {
+        onRefreshProfile();
+      }
+    } catch (err: any) {
+      console.error('Failed to apply plan tasks:', err);
     }
   };
+
+  const studentName = profile?.user?.name || 'Student Candidate';
+  const studentDepartment = profile?.user?.department || 'Engineering';
+  const readiness = profile?.placementReadiness !== undefined ? Math.round(profile.placementReadiness) : 0;
+  const connectedCount = profile?.connections?.filter((c) => c.isConnected).length || 0;
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
@@ -154,7 +156,7 @@ export const Coach: React.FC<CoachProps> = ({ profile, onRefreshProfile }) => {
 
         <div className="flex items-center space-x-2">
           <Badge variant="success">Active Placement Loop</Badge>
-          <Badge variant="info">Max 8-Step Reasoning</Badge>
+          <Badge variant="info">Multi-Step Reasoning</Badge>
         </div>
       </div>
 
@@ -162,26 +164,28 @@ export const Coach: React.FC<CoachProps> = ({ profile, onRefreshProfile }) => {
       <div className="bg-[#FFFFFF] border border-[#E5E7EB] rounded-lg p-4 shadow-xs flex flex-col md:flex-row items-center justify-between gap-4">
         <div className="flex items-center space-x-3.5">
           <div className="w-10 h-10 rounded-full bg-[#374151] flex items-center justify-center text-white font-bold font-mono text-sm">
-            {profile?.user.name.charAt(0) || 'S'}
+            {studentName.charAt(0)}
           </div>
           <div>
             <div className="flex items-center space-x-2">
-              <h2 className="font-bold text-sm text-[#1F2937]">{profile?.user.name || 'Student Candidate'}</h2>
-              <span className="text-xs text-[#6B7280]">({profile?.user.department || 'CSE'})</span>
+              <h2 className="font-bold text-sm text-[#1F2937]">{studentName}</h2>
+              <span className="text-xs text-[#6B7280]">({studentDepartment})</span>
             </div>
-            <p className="text-xs text-[#6B7280]">Target: <span className="font-semibold text-[#1F2937]">{profile?.targetRole || 'Software Development Engineer'}</span></p>
+            <p className="text-xs text-[#6B7280]">
+              Target: <span className="font-semibold text-[#1F2937]">{profile?.targetRole || 'Software Development Engineer'}</span>
+            </p>
           </div>
         </div>
 
         <div className="flex items-center space-x-6 text-xs">
           <div>
-            <span className="text-[#6B7280] block text-[11px] uppercase font-mono">Objective PRI</span>
-            <span className="font-mono font-bold text-base text-[#1F2937]">{profile?.placementReadiness || 74}/100</span>
+            <span className="text-[#6B7280] block text-[11px] uppercase font-mono">Verified PRI</span>
+            <span className="font-mono font-bold text-base text-[#1F2937]">{readiness}/100</span>
           </div>
           <div className="h-8 w-[1px] bg-[#E5E7EB]"></div>
           <div>
             <span className="text-[#6B7280] block text-[11px] uppercase font-mono">Connected Telemetry</span>
-            <span className="font-semibold text-emerald-600">{profile?.connections.filter((c) => c.isConnected).length || 5} Platforms</span>
+            <span className="font-semibold text-emerald-600">{connectedCount} Platforms</span>
           </div>
           <div className="h-8 w-[1px] bg-[#E5E7EB]"></div>
           <div>
@@ -191,7 +195,7 @@ export const Coach: React.FC<CoachProps> = ({ profile, onRefreshProfile }) => {
         </div>
       </div>
 
-      {/* Main Grid: Chat Interface on Left, Active Strategic Plan on Right */}
+      {/* Main Grid: Chat on Left, Strategic Plan on Right */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         {/* Chat Section */}
         <div className="lg:col-span-7 bg-[#FFFFFF] border border-[#E5E7EB] rounded-lg shadow-xs flex flex-col h-[640px]">
@@ -285,7 +289,7 @@ export const Coach: React.FC<CoachProps> = ({ profile, onRefreshProfile }) => {
           </div>
         </div>
 
-        {/* Right Section: Strategic Learning Plan & Milestones */}
+        {/* Right Section: Strategic Learning Plan */}
         <div className="lg:col-span-5 space-y-5">
           {activePlan ? (
             <div className="bg-[#FFFFFF] border border-[#E5E7EB] rounded-lg p-5 shadow-xs space-y-4">

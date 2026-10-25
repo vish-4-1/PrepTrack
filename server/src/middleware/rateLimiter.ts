@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import { env } from '../config/env';
 
 interface RateLimitStore {
   [key: string]: {
@@ -7,11 +8,19 @@ interface RateLimitStore {
   };
 }
 
-export function createRateLimiter(options: { windowMs: number; maxRequests: number; message?: string }) {
-  const store: RateLimitStore = {};
-  const { windowMs, maxRequests, message = 'Too many requests, please try again later.' } = options;
+export interface RateLimiterOptions {
+  windowMs?: number;
+  maxRequests?: number;
+  message?: string;
+}
 
-  // Periodic cleanup of stale IP records every 10 minutes
+export function createRateLimiter(options: RateLimiterOptions = {}) {
+  const store: RateLimitStore = {};
+  const windowMs = options.windowMs ?? env.RATE_LIMIT_WINDOW_MS;
+  const maxRequests = options.maxRequests ?? env.RATE_LIMIT_MAX_REQUESTS;
+  const message = options.message ?? 'Too many requests, please try again later.';
+
+  // Periodic cleanup of stale IP records based on windowMs
   setInterval(() => {
     const now = Date.now();
     for (const ip in store) {
@@ -19,7 +28,7 @@ export function createRateLimiter(options: { windowMs: number; maxRequests: numb
         delete store[ip];
       }
     }
-  }, 10 * 60 * 1000);
+  }, Math.max(60000, windowMs));
 
   return (req: Request, res: Response, next: NextFunction) => {
     const ip = req.ip || req.socket.remoteAddress || 'unknown-ip';

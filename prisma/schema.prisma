@@ -3,22 +3,22 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-
 generator client {
   provider = "prisma-client-js"
 }
 
 model User {
-  id            String          @id @default(uuid())
-  email         String          @unique
-  password      String
-  name          String
-  role          String          @default("STUDENT") // "STUDENT" | "ADMIN"
-  department    String?         @default("Computer Science")
-  branch        String?         @default("B.Tech CSE")
-  passoutYear   Int?            @default(2027)
-  createdAt     DateTime        @default(now())
-  updatedAt     DateTime        @updatedAt
+  id                  String          @id @default(uuid())
+  email               String          @unique
+  password            String
+  name                String
+  role                String          @default("STUDENT") // "STUDENT" | "ADMIN"
+  department          String?         @default("Computer Science")
+  branch              String?         @default("B.Tech CSE")
+  passoutYear         Int?            @default(2027)
+  onboardingCompleted Boolean         @default(false)
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
 
   studentProfile StudentProfile?
 }
@@ -35,11 +35,13 @@ model StudentProfile {
   createdAt             DateTime             @default(now())
   updatedAt             DateTime             @updatedAt
 
+  resumeProfile         ResumeProfile?
   connections           PlatformConnection[]
   gitHubProfile         GitHubProfile?
   codingProfiles        CodingProfile[]
   projects              Project[]
   skills                StudentSkill[]
+  skillMetrics          SkillMetric[]
   skillSnapshots        SkillSnapshot[]
   activitySnapshots     ActivitySnapshot[]
   recommendations       Recommendation[]
@@ -51,6 +53,17 @@ model StudentProfile {
   agentSessions         AgentSession[]
 }
 
+model ResumeProfile {
+  id                   String         @id @default(uuid())
+  studentProfileId     String         @unique
+  studentProfile       StudentProfile @relation(fields: [studentProfileId], references: [id], onDelete: Cascade)
+  rawText              String
+  extractedSkillsJson  String         @default("[]")
+  extractedProjectsJson String        @default("[]")
+  experienceSummary    String?
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+}
 
 model PlatformConnection {
   id               String         @id @default(uuid())
@@ -112,6 +125,14 @@ model Project {
   forks            Int            @default(0)
   commitCount      Int            @default(0)
   activityLevel    String         @default("MEDIUM") // HIGH, MEDIUM, LOW
+  
+  // Complexity & Architecture signals
+  architectureTier String         @default("Basic CRUD") // "Basic CRUD", "Full-Stack Production", "Advanced System"
+  difficultyScore  Float          @default(3.0) // 1.0 - 10.0
+  hasTests         Boolean        @default(false)
+  hasCiCd          Boolean        @default(false)
+  hasDocker        Boolean        @default(false)
+
   createdAt        DateTime       @default(now())
   updatedAt        DateTime       @updatedAt
 }
@@ -136,6 +157,23 @@ model StudentSkill {
   lastCalculatedAt DateTime       @default(now())
 
   @@unique([studentProfileId, skillId])
+}
+
+model SkillMetric {
+  id                   String         @id @default(uuid())
+  studentProfileId     String
+  studentProfile       StudentProfile @relation(fields: [studentProfileId], references: [id], onDelete: Cascade)
+  skillName            String
+  category             String         @default("General")
+  frequencyCount       Int            @default(0)
+  maxProjectDifficulty Float          @default(0)
+  avgProjectDifficulty Float          @default(0)
+  verifiedDepthScore   Float          @default(0) // 0 - 100
+  evidenceSummary      String?
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+
+  @@unique([studentProfileId, skillName])
 }
 
 model SkillSnapshot {
@@ -266,11 +304,25 @@ model AgentSession {
   id               String         @id @default(uuid())
   studentProfileId String
   studentProfile   StudentProfile @relation(fields: [studentProfileId], references: [id], onDelete: Cascade)
-  userMessage      String
-  agentResponse    String
+  stateSnapshot    String         @default("{}")
+  userMessage      String?
+  agentResponse    String?
   toolCallsJson    String         @default("[]")
   planJson         String?
   actionsJson      String?
   createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  messages         AgentMessage[]
 }
 
+model AgentMessage {
+  id             String       @id @default(uuid())
+  sessionId      String
+  session        AgentSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  role           String       // "user" | "assistant" | "system" | "tool"
+  content        String
+  toolCallsJson  String?
+  toolResultJson String?
+  createdAt      DateTime     @default(now())
+}

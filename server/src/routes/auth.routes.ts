@@ -3,21 +3,10 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { PrismaClient } from '@prisma/client';
 import { loginSchema, registerSchema } from '../validators';
+import { env } from '../config/env';
 
 const router = Router();
 const prisma = new PrismaClient();
-
-const getJwtSecret = (): string => {
-  const secret = process.env.JWT_SECRET;
-  if (!secret) {
-    if (process.env.NODE_ENV === 'production') {
-      throw new Error('FATAL: JWT_SECRET environment variable must be set in production');
-    }
-    return 'preptrack-placement-secret-key-2026';
-  }
-  return secret;
-};
-
 
 router.post('/register', async (req, res) => {
   try {
@@ -64,8 +53,8 @@ router.post('/register', async (req, res) => {
         role: user.role,
         studentProfileId: user.studentProfile?.id,
       },
-      getJwtSecret(),
-      { expiresIn: '7d' }
+      env.JWT_SECRET,
+      { expiresIn: env.JWT_EXPIRES_IN as jwt.SignOptions['expiresIn'] }
     );
 
     return res.status(201).json({
@@ -77,6 +66,7 @@ router.post('/register', async (req, res) => {
         email: user.email,
         role: user.role,
         studentProfileId: user.studentProfile?.id,
+        onboardingCompleted: user.onboardingCompleted,
       },
     });
   } catch (err: any) {
@@ -112,10 +102,9 @@ router.post('/login', async (req, res) => {
         role: user.role,
         studentProfileId: user.studentProfile?.id,
       },
-      getJwtSecret(),
-      { expiresIn: '7d' }
+      env.JWT_SECRET,
+      { expiresIn: env.JWT_EXPIRES_IN as jwt.SignOptions['expiresIn'] }
     );
-
 
     return res.json({
       message: 'Login successful',
@@ -126,6 +115,7 @@ router.post('/login', async (req, res) => {
         email: user.email,
         role: user.role,
         studentProfileId: user.studentProfile?.id,
+        onboardingCompleted: user.onboardingCompleted,
       },
     });
   } catch (err: any) {

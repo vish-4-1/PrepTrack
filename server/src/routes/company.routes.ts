@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { authenticateToken, AuthenticatedRequest } from '../middleware/auth.middleware';
 import { skillEngineService } from '../services/skillEngine.service';
+import { scoringConfig } from '../config/scoring.config';
 import { NormalizedCodingStats, NormalizedDevStats } from '../types';
 
 const router = Router();
@@ -87,7 +88,6 @@ router.get('/:id/readiness', authenticateToken, async (req: AuthenticatedRequest
       },
     });
 
-    // 1. Reconstruct or retrieve live candidate skill vector
     const codingStats: NormalizedCodingStats[] = (profile?.codingProfiles || []).map((cp) => ({
       totalSolved: cp.totalSolved,
       easySolved: cp.easySolved,
@@ -115,16 +115,17 @@ router.get('/:id/readiness', authenticateToken, async (req: AuthenticatedRequest
 
     const scores = skillEngineService.calculateScores(codingStats, devStats);
 
-    // 2. Multi-dimensional requirement matching
     let totalWeightedScore = 0;
     let totalWeight = 0;
     const missingSkills: any[] = [];
     const skillBreakdown: any[] = [];
 
     const requirements = (company as any).requirements || [];
+    const priorityWeights = scoringConfig.companyReadiness.priorityWeights;
+
     requirements.forEach((req: any) => {
       const studentScore = resolveStudentScore(req.skillName, scores);
-      const weight = req.priority === 'HIGH' ? 1.5 : req.priority === 'MEDIUM' ? 1.0 : 0.75;
+      const weight = (priorityWeights as any)[req.priority] || 1.0;
       
       const matchPct = Math.min(100, Math.round((studentScore / req.minScore) * 100));
       const isMet = studentScore >= req.minScore;
@@ -133,7 +134,6 @@ router.get('/:id/readiness', authenticateToken, async (req: AuthenticatedRequest
       totalWeight += weight;
 
       const topics = JSON.parse(req.topicsJson || '[]');
-
 
       skillBreakdown.push({
         skillName: req.skillName,
@@ -158,9 +158,9 @@ router.get('/:id/readiness', authenticateToken, async (req: AuthenticatedRequest
     });
 
     const readinessScore = totalWeight > 0 ? Math.round(totalWeightedScore / totalWeight) : scores.overallReadinessIndex;
-    const status = readinessScore >= 80 ? 'READY' : readinessScore >= 65 ? 'MODERATE' : 'NEEDS_WORK';
+    const thresholds = scoringConfig.companyReadiness.thresholds;
+    const status = readinessScore >= thresholds.ready ? 'READY' : readinessScore >= thresholds.moderate ? 'MODERATE' : 'NEEDS_WORK';
 
-    // 3. Dynamic Company Tailored Recommendations
     const recommendedActions: string[] = [];
     if (missingSkills.length > 0) {
       missingSkills.slice(0, 3).forEach((gap) => {
@@ -173,7 +173,6 @@ router.get('/:id/readiness', authenticateToken, async (req: AuthenticatedRequest
       recommendedActions.push(`Perform timed behavioral & system design mock rounds targeted for ${company.name} interview loops.`);
     }
 
-    // 4. Persist company readiness record
     try {
       await prisma.companyReadiness.upsert({
         where: {
@@ -218,4 +217,3 @@ router.get('/:id/readiness', authenticateToken, async (req: AuthenticatedRequest
 });
 
 export default router;
-

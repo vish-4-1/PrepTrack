@@ -1,5 +1,6 @@
 import { ProfileConnector } from './ProfileConnector';
 import { ConnectorResponse, PlatformName } from '../types';
+import { connectorsConfig, ConnectorError } from '../config/connectors.config';
 
 export interface LinkedInPublicData {
   profileUrl: string;
@@ -15,7 +16,7 @@ export class LinkedInConnector extends ProfileConnector<LinkedInPublicData> {
   validateUrl(url: string): boolean {
     if (!url) return false;
     const clean = this.sanitizeUrl(url);
-    return /^https?:\/\/(www\.)?linkedin\.com\/in\/[a-zA-Z0-9_-]+\/?$/.test(clean);
+    return connectorsConfig.linkedin.urlPattern.test(clean);
   }
 
   extractUsername(url: string): string | null {
@@ -29,13 +30,7 @@ export class LinkedInConnector extends ProfileConnector<LinkedInPublicData> {
   async fetchProfile(profileUrl: string): Promise<ConnectorResponse<LinkedInPublicData>> {
     const username = this.extractUsername(profileUrl);
     if (!username) {
-      return {
-        success: false,
-        platform: this.platform,
-        rawProfileUrl: profileUrl,
-        error: 'Invalid LinkedIn URL format',
-        isPublicDataOnly: true,
-      };
+      throw new ConnectorError('Invalid LinkedIn URL format', this.platform, 400);
     }
 
     return {
@@ -45,9 +40,9 @@ export class LinkedInConnector extends ProfileConnector<LinkedInPublicData> {
       data: {
         profileUrl,
         username,
-        verifiedStatus: 'Connected (Public Profile Metadata Only)',
-        skillsExtracted: ['Java', 'React.js', 'Data Structures', 'REST APIs', 'PostgreSQL'],
-        certifications: ['AWS Certified Cloud Practitioner', 'MetaData Science Professional Certificate'],
+        verifiedStatus: 'Verified LinkedIn Profile Link',
+        skillsExtracted: [],
+        certifications: [],
       },
       isPublicDataOnly: true,
     };

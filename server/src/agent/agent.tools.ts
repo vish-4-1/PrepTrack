@@ -4,6 +4,7 @@ import { AgentToolDefinition } from './agent.types';
 import { skillEngineService } from '../services/skillEngine.service';
 import { normalizerService } from '../services/normalizer.service';
 import { NormalizedCodingStats, NormalizedDevStats } from '../types';
+import { scoringConfig } from '../config/scoring.config';
 
 const prisma = new PrismaClient();
 
@@ -22,11 +23,13 @@ export const getStudentProfileTool: AgentToolDefinition = {
       include: {
         user: { select: { name: true, email: true, department: true, branch: true, passoutYear: true } },
         connections: true,
+        resumeProfile: true,
+        projects: { select: { id: true, name: true, architectureTier: true, difficultyScore: true } },
       },
     });
 
     if (!profile) {
-      throw new Error(`Student profile ${context.studentProfileId} not found`);
+      throw new Error(`Student profile "${context.studentProfileId}" not found in database.`);
     }
 
     context.state.studentName = profile.user.name;
@@ -40,6 +43,8 @@ export const getStudentProfileTool: AgentToolDefinition = {
       passoutYear: profile.user.passoutYear,
       targetRole: profile.targetRole,
       placementReadiness: profile.placementReadiness,
+      hasResume: !!profile.resumeProfile,
+      projectCount: profile.projects.length,
       connectedPlatforms: profile.connections.map((c) => ({
         platform: c.platform,
         url: c.profileUrl,
@@ -53,7 +58,7 @@ export const getStudentProfileTool: AgentToolDefinition = {
 // 2. Tool: get_skill_scores
 export const getSkillScoresTool: AgentToolDefinition = {
   name: 'get_skill_scores',
-  description: "Retrieve the student's verified objective skill scores (DSA, Dev, DBMS, OS, System Design, Git, OOP, Networks, PRI) calculated deterministically from platform telemetry.",
+  description: "Retrieve the student's verified objective skill scores and complexity metrics calculated deterministically from platform telemetry and live projects.",
   parameters: {
     type: 'object',
     properties: {},
@@ -66,10 +71,16 @@ export const getSkillScoresTool: AgentToolDefinition = {
         codingProfiles: true,
         gitHubProfile: true,
         connections: true,
+        skillMetrics: { orderBy: { verifiedDepthScore: 'desc' } },
+        projects: true,
       },
     });
 
-    const codingStats: NormalizedCodingStats[] = (profile?.codingProfiles || []).map((cp) => ({
+    if (!profile) {
+      throw new Error(`Student profile "${context.studentProfileId}" does not exist.`);
+    }
+
+    const codingStats: NormalizedCodingStats[] = (profile.codingProfiles || []).map((cp) => ({
       totalSolved: cp.totalSolved,
       easySolved: cp.easySolved,
       mediumSolved: cp.mediumSolved,
@@ -80,7 +91,7 @@ export const getSkillScoresTool: AgentToolDefinition = {
     }));
 
     let devStats: NormalizedDevStats | undefined = undefined;
-    if (profile?.gitHubProfile) {
+    if (profile.gitHubProfile) {
       devStats = {
         totalRepos: profile.gitHubProfile.totalRepos,
         publicRepos: profile.gitHubProfile.publicRepos,
@@ -94,7 +105,7 @@ export const getSkillScoresTool: AgentToolDefinition = {
       };
     }
 
-    const hasLinkedIn = profile?.connections.some((c) => c.platform === 'LINKEDIN' && c.isConnected);
+    const hasLinkedIn = profile.connections.some((c) => c.platform === 'LINKEDIN' && c.isConnected);
     const scores = skillEngineService.calculateScores(codingStats, devStats, { linkedinConnected: hasLinkedIn });
 
     context.state.cachedSkillScores = scores;
@@ -111,6 +122,13 @@ export const getSkillScoresTool: AgentToolDefinition = {
       networksScore: scores.networksScore,
       aptitudeScore: scores.aptitudeScore,
       communicationScore: scores.communicationScore,
+      verifiedSkillMetrics: profile.skillMetrics.map((sm) => ({
+        skillName: sm.skillName,
+        verifiedDepthScore: sm.verifiedDepthScore,
+        maxProjectDifficulty: sm.maxProjectDifficulty,
+        avgProjectDifficulty: sm.avgProjectDifficulty,
+        evidenceSummary: sm.evidenceSummary,
+      })),
       breakdown: scores.breakdown,
     };
   },
@@ -191,8 +209,12 @@ export const getPlatformStatsTool: AgentToolDefinition = {
       },
     });
 
+    if (!profile) {
+      throw new Error(`Profile not found for ID: ${context.studentProfileId}`);
+    }
+
     return {
-      gitHub: profile?.gitHubProfile
+      gitHub: profile.gitHubProfile
         ? {
             publicRepos: profile.gitHubProfile.publicRepos,
             totalStars: profile.gitHubProfile.totalStars,
@@ -202,7 +224,7 @@ export const getPlatformStatsTool: AgentToolDefinition = {
             topRepos: JSON.parse(profile.gitHubProfile.topReposJson || '[]'),
           }
         : null,
-      codingPlatforms: (profile?.codingProfiles || []).map((cp) => ({
+      codingPlatforms: profile.codingProfiles.map((cp) => ({
         platform: cp.platform,
         totalSolved: cp.totalSolved,
         easySolved: cp.easySolved,
@@ -224,7 +246,7 @@ export const getCompanyRequirementsTool: AgentToolDefinition = {
     properties: {
       companyName: {
         type: 'string',
-        description: 'Optional name of the target company (e.g. "Amazon", "Google"). If omitted, all target companies are returned.',
+        description: 'Optional name of the target company. If omitted, all target companies are returned.',
       },
     },
   },
@@ -232,14 +254,16 @@ export const getCompanyRequirementsTool: AgentToolDefinition = {
     companyName: z.string().optional(),
   }),
   execute: async (args, _context) => {
-    const where = args.companyName
-      ? { name: { contains: args.companyName } }
-      : {};
+    const where = args.companyName ? { name: { contains: args.companyName } } : {};
 
     const companies = await prisma.targetCompany.findMany({
       where,
       include: { requirements: true },
     });
+
+    if (args.companyName && companies.length === 0) {
+      throw new Error(`No benchmark profiles found matching company "${args.companyName}".`);
+    }
 
     return {
       companies: companies.map((c: any) => ({
@@ -268,7 +292,7 @@ export const calculateCompanyReadinessTool: AgentToolDefinition = {
     properties: {
       companyName: {
         type: 'string',
-        description: 'Name of the company to evaluate against (e.g. "Amazon", "Google").',
+        description: 'Name of the company to evaluate against.',
       },
     },
     required: ['companyName'],
@@ -283,7 +307,7 @@ export const calculateCompanyReadinessTool: AgentToolDefinition = {
     });
 
     if (!company) {
-      throw new Error(`Target company "${args.companyName}" not found in hiring database`);
+      throw new Error(`Target company "${args.companyName}" not found in database.`);
     }
 
     const profile = await prisma.studentProfile.findUnique({
@@ -294,7 +318,11 @@ export const calculateCompanyReadinessTool: AgentToolDefinition = {
       },
     });
 
-    const codingStats: NormalizedCodingStats[] = (profile?.codingProfiles || []).map((cp) => ({
+    if (!profile) {
+      throw new Error(`Student profile "${context.studentProfileId}" not found in database.`);
+    }
+
+    const codingStats: NormalizedCodingStats[] = profile.codingProfiles.map((cp) => ({
       totalSolved: cp.totalSolved,
       easySolved: cp.easySolved,
       mediumSolved: cp.mediumSolved,
@@ -305,7 +333,7 @@ export const calculateCompanyReadinessTool: AgentToolDefinition = {
     }));
 
     let devStats: NormalizedDevStats | undefined = undefined;
-    if (profile?.gitHubProfile) {
+    if (profile.gitHubProfile) {
       devStats = {
         totalRepos: profile.gitHubProfile.totalRepos,
         publicRepos: profile.gitHubProfile.publicRepos,
@@ -338,12 +366,13 @@ export const calculateCompanyReadinessTool: AgentToolDefinition = {
     const missingSkills: any[] = [];
 
     const requirements = (company as any).requirements || [];
+    const priorityWeights = scoringConfig.companyReadiness.priorityWeights;
+
     requirements.forEach((req: any) => {
       const studentScore = resolveScore(req.skillName);
-      const weight = req.priority === 'HIGH' ? 1.5 : 1.0;
+      const weight = (priorityWeights as any)[req.priority] || 1.0;
       const isMet = studentScore >= req.minScore;
       const matchPct = Math.min(100, Math.round((studentScore / req.minScore) * 100));
-
 
       totalWeightedScore += matchPct * weight;
       totalWeight += weight;
@@ -371,7 +400,8 @@ export const calculateCompanyReadinessTool: AgentToolDefinition = {
     });
 
     const readinessScore = totalWeight > 0 ? Math.round(totalWeightedScore / totalWeight) : scores.overallReadinessIndex;
-    const status = readinessScore >= 80 ? 'READY' : readinessScore >= 65 ? 'MODERATE' : 'NEEDS_WORK';
+    const thresholds = scoringConfig.companyReadiness.thresholds;
+    const status = readinessScore >= thresholds.ready ? 'READY' : readinessScore >= thresholds.moderate ? 'MODERATE' : 'NEEDS_WORK';
 
     return {
       companyName: company.name,
@@ -452,7 +482,7 @@ export const createActionItemTool: AgentToolDefinition = {
       title: { type: 'string', description: 'Clear, actionable title of the action item' },
       category: { type: 'string', enum: ['Coding', 'Project', 'Theory', 'Mock Interview', 'Documentation'] },
       priority: { type: 'string', enum: ['HIGH', 'MEDIUM', 'LOW'] },
-      estimatedHours: { type: 'number', description: 'Estimated hours needed to complete (e.g. 2, 4, 8)' },
+      estimatedHours: { type: 'number', description: 'Estimated hours needed to complete' },
       reason: { type: 'string', description: 'Explicit data-driven justification for why this action was assigned' },
     },
     required: ['title', 'category', 'priority', 'reason'],
@@ -465,6 +495,14 @@ export const createActionItemTool: AgentToolDefinition = {
     reason: z.string().min(5),
   }),
   execute: async (args, context) => {
+    const profile = await prisma.studentProfile.findUnique({
+      where: { id: context.studentProfileId },
+    });
+
+    if (!profile) {
+      throw new Error(`Cannot assign action item: Student profile "${context.studentProfileId}" not found.`);
+    }
+
     const action = await prisma.actionItem.create({
       data: {
         studentProfileId: context.studentProfileId,
@@ -506,7 +544,7 @@ export const completeActionItemTool: AgentToolDefinition = {
     });
 
     if (!action) {
-      throw new Error(`Action item ${args.actionId} not found for this student`);
+      throw new Error(`Action item ${args.actionId} not found in database for student ${context.studentProfileId}.`);
     }
 
     const updated = await prisma.actionItem.update({
@@ -553,6 +591,14 @@ export const createProjectRecommendationTool: AgentToolDefinition = {
     milestones: z.array(z.string()).default([]),
   }),
   execute: async (args, context) => {
+    const profile = await prisma.studentProfile.findUnique({
+      where: { id: context.studentProfileId },
+    });
+
+    if (!profile) {
+      throw new Error(`Cannot create project recommendation: Student profile "${context.studentProfileId}" not found.`);
+    }
+
     const project = await prisma.projectRecommendation.create({
       data: {
         studentProfileId: context.studentProfileId,

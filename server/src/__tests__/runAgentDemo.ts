@@ -4,33 +4,46 @@ import { agentService } from '../agent/agent.service';
 const prisma = new PrismaClient();
 
 async function runDemo() {
+  const targetUsername = process.env.TEST_USERNAME || process.argv[2];
+
+  if (!targetUsername) {
+    console.log('\n[Notice] No target username provided via CLI or TEST_USERNAME env variable.');
+    console.log('Usage: npx ts-node src/__tests__/runAgentDemo.ts <target_username>');
+    console.log('Defaulting to candidate identifier: "demo_candidate"\n');
+  }
+
+  const effectiveUsername = targetUsername || 'demo_candidate';
+  const effectiveEmail = `${effectiveUsername}@university.edu`;
+  const effectiveName = effectiveUsername.replace(/[-_.]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+
   console.log('===============================================================');
   console.log('       PREPTALK AI PLACEMENT COACH - LIVE AGENT DEMO          ');
+  console.log(`       Candidate: ${effectiveName} (${effectiveEmail})`);
   console.log('===============================================================\n');
 
-  // 1. Ensure a student profile exists in SQLite
+  // Ensure a student profile exists in SQLite
   let user = await prisma.user.findFirst({
-    where: { email: 'vishal.demo@annauniv.edu' },
+    where: { email: effectiveEmail },
     include: { studentProfile: true },
   });
 
   if (!user || !user.studentProfile) {
-    console.log('Creating student candidate profile: Vishal Kumar D (Anna Univ MIT Campus CSE)...');
+    console.log(`Creating student candidate profile: ${effectiveName}...`);
     user = await prisma.user.create({
       data: {
-        email: 'vishal.demo@annauniv.edu',
+        email: effectiveEmail,
         password: 'demopassword123',
-        name: 'Vishal Kumar D',
+        name: effectiveName,
         role: 'STUDENT',
         department: 'Computer Science & Engineering',
-        branch: 'B.E. Computer Science (MIT Campus)',
+        branch: 'B.E. Computer Science',
         passoutYear: 2027,
         studentProfile: {
           create: {
-            username: 'vish41_demo',
+            username: effectiveUsername,
             placementReadiness: 74,
             targetRole: 'Software Development Engineer',
-            summary: '8.54 CGPA, strong DSA foundation, aiming for Tier-1 product placement.',
+            summary: 'Strong algorithmic foundation, aiming for Tier-1 product placement.',
             codingProfiles: {
               create: [
                 { platform: 'CODECHEF', totalSolved: 185, easySolved: 90, mediumSolved: 75, hardSolved: 20, contestRating: 1742, globalRank: 18200, contestsParticipated: 22 },
@@ -49,17 +62,16 @@ async function runDemo() {
                 issueCount: 3,
                 languagesJson: JSON.stringify({ TypeScript: 4, Java: 3, Python: 2, 'C++': 1 }),
                 topReposJson: JSON.stringify([
-                  { name: 'AU-MIT-Team-Ryzen', description: 'Anna University MIT Campus Team Ryzen Repository', stars: 8, forks: 3, language: 'C++', commitCount: 54 },
                   { name: 'algo-visualizer', description: 'Interactive graph and tree algorithm solver', stars: 6, forks: 2, language: 'TypeScript', commitCount: 38 },
                 ]),
               },
             },
             skillSnapshots: {
               create: [
-                { snapshotMonth: 'May 2026', dsaScore: 68, devScore: 60, dbmsScore: 58, osScore: 56, overallScore: 62 },
-                { snapshotMonth: 'Jun 2026', dsaScore: 72, devScore: 65, dbmsScore: 62, osScore: 61, overallScore: 67 },
-                { snapshotMonth: 'Jul 2026', dsaScore: 76, devScore: 71, dbmsScore: 67, osScore: 68, overallScore: 72 },
-                { snapshotMonth: 'Aug 2026', dsaScore: 82, devScore: 78, dbmsScore: 72, osScore: 70, overallScore: 78 },
+                { snapshotMonth: '2026-05', dsaScore: 68, devScore: 60, dbmsScore: 58, osScore: 56, overallScore: 62 },
+                { snapshotMonth: '2026-06', dsaScore: 72, devScore: 65, dbmsScore: 62, osScore: 61, overallScore: 67 },
+                { snapshotMonth: '2026-07', dsaScore: 76, devScore: 71, dbmsScore: 67, osScore: 68, overallScore: 72 },
+                { snapshotMonth: '2026-08', dsaScore: 82, devScore: 78, dbmsScore: 72, osScore: 70, overallScore: 78 },
               ],
             },
           },
@@ -72,7 +84,7 @@ async function runDemo() {
   const profileId = user.studentProfile!.id;
   console.log(`Student Profile Active: ${user.name} (ID: ${profileId})\n`);
 
-  // 2. Scenario 1: "What should I focus on this week?"
+  // Scenario 1: "What should I focus on this week?"
   console.log('---------------------------------------------------------------');
   console.log('SCENARIO 1: Student Prompt: "What should I focus on this week?"');
   console.log('---------------------------------------------------------------');
@@ -98,7 +110,7 @@ async function runDemo() {
     response1.plan.dailyPlan.slice(0, 3).forEach((d) => console.log(`  - Day ${d.day} (${d.focusArea}): ${d.tasks.join('; ')}`));
   }
 
-  // 3. Scenario 2: "Prepare me for Amazon SDE placement drive"
+  // Scenario 2: "Prepare me for Amazon SDE placement drive"
   console.log('\n---------------------------------------------------------------');
   console.log('SCENARIO 2: Student Prompt: "Prepare me for Amazon SDE placement drive"');
   console.log('---------------------------------------------------------------');
@@ -113,7 +125,7 @@ async function runDemo() {
   console.log('\n>>> AGENT FINAL RESPONSE:');
   console.log(response2.message);
 
-  // 4. Scenario 3: Apply plan to Action Center
+  // Scenario 3: Apply plan to Action Center
   if (response1.plan) {
     console.log('\n---------------------------------------------------------------');
     console.log('SCENARIO 3: Applying Strategic Plan to Student Action Center');

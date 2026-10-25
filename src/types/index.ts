@@ -8,6 +8,7 @@ export interface User {
   department?: string;
   branch?: string;
   passoutYear?: number;
+  onboardingCompleted?: boolean;
   studentProfileId?: string;
 }
 
@@ -65,6 +66,43 @@ export interface ActionItem {
   completedAt?: string;
 }
 
+export interface Project {
+  id: string;
+  name: string;
+  description: string;
+  repoUrl?: string;
+  technologiesJson: string;
+  stars: number;
+  forks: number;
+  commitCount: number;
+  activityLevel: string;
+  architectureTier: 'Basic CRUD' | 'Full-Stack Production' | 'Advanced System';
+  difficultyScore: number; // 1.0 - 10.0
+  hasTests: boolean;
+  hasCiCd: boolean;
+  hasDocker: boolean;
+  createdAt: string;
+}
+
+export interface SkillMetric {
+  id: string;
+  skillName: string;
+  category: string;
+  frequencyCount: number;
+  maxProjectDifficulty: number;
+  avgProjectDifficulty: number;
+  verifiedDepthScore: number;
+  evidenceSummary?: string;
+}
+
+export interface ResumeProfile {
+  id: string;
+  rawText: string;
+  extractedSkillsJson: string;
+  extractedProjectsJson: string;
+  experienceSummary?: string;
+}
+
 export interface ProjectRecommendation {
   id: string;
   title: string;
@@ -101,9 +139,12 @@ export interface StudentProfile {
   summary?: string;
   targetRole?: string;
   user: User;
+  resumeProfile?: ResumeProfile;
   connections: PlatformConnection[];
   gitHubProfile?: GitHubProfile;
   codingProfiles: CodingProfile[];
+  projects?: Project[];
+  skillMetrics?: SkillMetric[];
   skillSnapshots: SkillSnapshot[];
   actionItems: ActionItem[];
   projectRecommendations?: ProjectRecommendation[];
@@ -148,4 +189,3 @@ export interface AgentChatMessage {
   actions?: any[];
   timestamp: string;
 }
-

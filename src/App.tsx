@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { Sidebar } from './components/layout/Sidebar';
 import { Topbar } from './components/layout/Topbar';
@@ -11,53 +11,68 @@ import { CompanyPrep } from './pages/CompanyPrep';
 import { AdminDashboard } from './pages/AdminDashboard';
 import { Coach } from './pages/Coach';
 import { StudentProfile } from './types';
-import { getDemoStudentProfile, api } from './services/api';
-
+import { api } from './services/api';
 
 export const App: React.FC = () => {
-  const [isDemoMode, setIsDemoMode] = useState<boolean>(true);
-  const [isAdminMode, setIsAdminMode] = useState<boolean>(false);
+  const [profile, setProfile] = useState<StudentProfile | null>(null);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
 
-  // Profile State
-  const [profile, setProfile] = useState<StudentProfile | null>(getDemoStudentProfile());
-
-  const fetchRealProfile = async () => {
+  const fetchRealProfile = useCallback(async () => {
     try {
-      const res = await api.get('/profile');
-      if (res.data?.profile) {
+      setIsLoading(true);
+      let res;
+      try {
+        res = await api.get('/profile');
+      } catch (err: any) {
+        if (err.response?.status === 401 || err.response?.status === 403 || !localStorage.getItem('preptrack_token')) {
+          // Initialize session with demo student candidate credentials
+          const authRes = await api
+            .post('/auth/register', {
+              name: 'Candidate Student',
+              email: 'student.candidate@preptrack.edu',
+              password: 'demopassword123',
+              department: 'Computer Science & Engineering',
+              branch: 'B.Tech CSE',
+              passoutYear: 2027,
+            })
+            .catch(() =>
+              api.post('/auth/login', {
+                email: 'student.candidate@preptrack.edu',
+                password: 'demopassword123',
+              })
+            );
+
+          if (authRes.data?.token) {
+            localStorage.setItem('preptrack_token', authRes.data.token);
+            res = await api.get('/profile');
+          }
+        }
+      }
+
+      if (res?.data?.profile) {
         setProfile(res.data.profile);
       }
     } catch (err) {
-      // Fallback to seeded demo profile if not logged in or endpoint unauthenticated
-      setProfile(getDemoStudentProfile());
+      console.error('Failed to retrieve student profile:', err);
+    } finally {
+      setIsLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    if (!isDemoMode) {
-      fetchRealProfile();
-    } else {
-      setProfile(getDemoStudentProfile());
-    }
-  }, [isDemoMode]);
+    fetchRealProfile();
+  }, [fetchRealProfile]);
 
   const handleSync = async () => {
     setIsSyncing(true);
-    if (isDemoMode) {
-      setTimeout(() => {
-        setIsSyncing(false);
-        setProfile(getDemoStudentProfile());
-      }, 1200);
-    } else {
-      try {
-        await api.post('/profile/sync');
-        await fetchRealProfile();
-      } catch (err) {
-        console.error('Real backend sync error:', err);
-      } finally {
-        setIsSyncing(false);
-      }
+    try {
+      await api.post('/profile/sync');
+      await fetchRealProfile();
+    } catch (err) {
+      console.error('Profile synchronization error:', err);
+    } finally {
+      setIsSyncing(false);
     }
   };
 
@@ -65,12 +80,7 @@ export const App: React.FC = () => {
     <Router>
       <div className="flex h-screen bg-[#F8F9FA] text-[#1F2937] overflow-hidden font-sans">
         {/* Navigation Sidebar */}
-        <Sidebar
-          isDemoMode={isDemoMode}
-          onToggleDemoMode={() => setIsDemoMode(!isDemoMode)}
-          isAdminMode={isAdminMode}
-          onToggleAdminMode={() => setIsAdminMode(!isAdminMode)}
-        />
+        <Sidebar />
 
         {/* Main Content Area */}
         <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
@@ -78,14 +88,36 @@ export const App: React.FC = () => {
             profile={profile}
             onSync={handleSync}
             isSyncing={isSyncing}
-            isDemoMode={isDemoMode}
+            isLoading={isLoading}
           />
 
           <main className="flex-1 overflow-y-auto p-6 bg-[#F8F9FA]">
             <Routes>
-              <Route path="/" element={<Dashboard profile={profile} onSync={handleSync} isSyncing={isSyncing} />} />
+              <Route
+                path="/"
+                element={
+                  profile && profile.user && profile.user.onboardingCompleted === false ? (
+                    <Navigate to="/onboarding" replace />
+                  ) : (
+                    <Dashboard profile={profile} onSync={handleSync} isSyncing={isSyncing} isLoading={isLoading} />
+                  )
+                }
+              />
+              <Route
+                path="/dashboard"
+                element={
+                  profile && profile.user && profile.user.onboardingCompleted === false ? (
+                    <Navigate to="/onboarding" replace />
+                  ) : (
+                    <Dashboard profile={profile} onSync={handleSync} isSyncing={isSyncing} isLoading={isLoading} />
+                  )
+                }
+              />
               <Route path="/coach" element={<Coach profile={profile} onRefreshProfile={handleSync} />} />
-              <Route path="/onboarding" element={<ProfileOnboarding profile={profile} onSync={handleSync} isSyncing={isSyncing} />} />
+              <Route
+                path="/onboarding"
+                element={<ProfileOnboarding profile={profile} onSync={handleSync} isSyncing={isSyncing} />}
+              />
               <Route path="/track-record" element={<TrackRecord profile={profile} />} />
               <Route path="/actions" element={<ActionCenter profile={profile} onRefresh={handleSync} />} />
               <Route path="/build-next" element={<BuildNext profile={profile} />} />
@@ -93,7 +125,6 @@ export const App: React.FC = () => {
               <Route path="/admin" element={<AdminDashboard />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
-
           </main>
         </div>
       </div>

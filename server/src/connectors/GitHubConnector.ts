@@ -1,6 +1,8 @@
 import axios from 'axios';
 import { ProfileConnector } from './ProfileConnector';
-import { ConnectorResponse, NormalizedDevStats, PlatformName } from '../types';
+import { ConnectorResponse, NormalizedDevStats, PlatformName, AnalyzedRepo } from '../types';
+import { connectorsConfig, ConnectorError } from '../config/connectors.config';
+import { scoringConfig } from '../config/scoring.config';
 
 export class GitHubConnector extends ProfileConnector<NormalizedDevStats> {
   readonly platform: PlatformName = 'GITHUB';
@@ -8,7 +10,7 @@ export class GitHubConnector extends ProfileConnector<NormalizedDevStats> {
   validateUrl(url: string): boolean {
     if (!url) return false;
     const clean = this.sanitizeUrl(url);
-    return /^https?:\/\/(www\.)?github\.com\/[a-zA-Z0-9_-]+\/?$/.test(clean);
+    return connectorsConfig.github.urlPattern.test(clean);
   }
 
   extractUsername(url: string): string | null {
@@ -19,14 +21,10 @@ export class GitHubConnector extends ProfileConnector<NormalizedDevStats> {
     return parts[1].split('/')[0];
   }
 
-  private getAuthHeaders() {
-    const headers: Record<string, string> = {
-      'User-Agent': 'PrepTrack-Placement-Platform',
-      'Accept': 'application/vnd.github.v3+json',
-    };
-    const token = process.env.GITHUB_TOKEN;
-    if (token) {
-      headers['Authorization'] = `token ${token}`;
+  private getAuthHeaders(): Record<string, string> {
+    const headers: Record<string, string> = { ...connectorsConfig.github.headers };
+    if (connectorsConfig.github.token) {
+      headers['Authorization'] = `token ${connectorsConfig.github.token}`;
     }
     return headers;
   }
@@ -34,21 +32,23 @@ export class GitHubConnector extends ProfileConnector<NormalizedDevStats> {
   async fetchProfile(profileUrl: string): Promise<ConnectorResponse<NormalizedDevStats>> {
     const username = this.extractUsername(profileUrl);
     if (!username) {
-      return {
-        success: false,
-        platform: this.platform,
-        rawProfileUrl: profileUrl,
-        error: 'Invalid GitHub profile URL format',
-        isPublicDataOnly: true,
-      };
+      throw new ConnectorError('Invalid GitHub profile URL format', this.platform, 400);
     }
 
     const headers = this.getAuthHeaders();
+    const config = connectorsConfig.github;
+    const commitEstimates = scoringConfig.development.commitEstimation;
 
     try {
       const [userRes, reposRes] = await Promise.all([
-        axios.get(`https://api.github.com/users/${username}`, { timeout: 8000, headers }),
-        axios.get(`https://api.github.com/users/${username}/repos?per_page=100&sort=updated`, { timeout: 8000, headers }),
+        axios.get(`${config.baseUrl}/users/${username}`, {
+          timeout: config.timeoutMs,
+          headers,
+        }),
+        axios.get(`${config.baseUrl}/users/${username}/repos?per_page=${config.perPage}&sort=updated`, {
+          timeout: config.timeoutMs,
+          headers,
+        }),
       ]);
 
       const user = userRes.data;
@@ -66,23 +66,22 @@ export class GitHubConnector extends ProfileConnector<NormalizedDevStats> {
         }
       });
 
-      // Try fetching authentic search telemetry for commits, PRs, and issues
       let totalCommits = 0;
       let prCount = 0;
       let issueCount = 0;
 
       try {
         const [commitsRes, prsRes, issuesRes] = await Promise.allSettled([
-          axios.get(`https://api.github.com/search/commits?q=author:${username}`, {
-            timeout: 5000,
-            headers: { ...headers, Accept: 'application/vnd.github.cloak-preview+json' },
+          axios.get(`${config.baseUrl}/search/commits?q=author:${username}`, {
+            timeout: config.searchTimeoutMs,
+            headers: { ...headers, Accept: config.searchCommitsAccept },
           }),
-          axios.get(`https://api.github.com/search/issues?q=author:${username}+type:pr`, {
-            timeout: 5000,
+          axios.get(`${config.baseUrl}/search/issues?q=author:${username}+type:pr`, {
+            timeout: config.searchTimeoutMs,
             headers,
           }),
-          axios.get(`https://api.github.com/search/issues?q=author:${username}+type:issue`, {
-            timeout: 5000,
+          axios.get(`${config.baseUrl}/search/issues?q=author:${username}+type:issue`, {
+            timeout: config.searchTimeoutMs,
             headers,
           }),
         ]);
@@ -97,26 +96,132 @@ export class GitHubConnector extends ProfileConnector<NormalizedDevStats> {
           issueCount = issuesRes.value.data.total_count;
         }
       } catch {
-        // Search API failed or rate limited; calculate deterministic floor
+        // Search API rate limited, continue
       }
 
-      // If search API was rate-limited, calculate deterministic baseline from repositories
-      if (totalCommits === 0) {
-        totalCommits = Math.max(repos.length * 15, totalStars * 2 + (user.public_repos || 1) * 12);
-      }
-      if (prCount === 0 && user.public_repos) {
-        prCount = Math.max(1, Math.floor(user.public_repos * 1.5));
-      }
+      // Analyze top repositories for complexity, tests, CI/CD, and architecture tiers
+      const topReposToAnalyze = repos.slice(0, 6);
+      const topRepos: AnalyzedRepo[] = await Promise.all(
+        topReposToAnalyze.map(async (repo: any) => {
+          const defaultBranch = repo.default_branch || 'main';
+          let hasTests = false;
+          let hasCiCd = false;
+          let hasDocker = false;
+          let hasBackendDepth = false;
+          const signals: string[] = [];
 
-      const topRepos = repos.slice(0, 5).map((repo: any) => ({
-        name: repo.name,
-        description: repo.description || 'Public GitHub Repository',
-        repoUrl: repo.html_url,
-        stars: repo.stargazers_count || 0,
-        forks: repo.forks_count || 0,
-        language: repo.language || 'Unknown',
-        commitCount: repo.open_issues_count ? repo.open_issues_count * 4 + 12 : 24,
-      }));
+          const repoDesc = (repo.description || '').toLowerCase();
+          const repoTopics = Array.isArray(repo.topics) ? repo.topics.join(' ').toLowerCase() : '';
+          const metaText = `${repo.name} ${repoDesc} ${repoTopics}`.toLowerCase();
+
+          // Try inspecting repository root tree contents
+          try {
+            const treeRes = await axios.get(
+              `${config.baseUrl}/repos/${username}/${repo.name}/git/trees/${defaultBranch}?recursive=1`,
+              {
+                headers,
+                timeout: Math.round(config.searchTimeoutMs * 0.8),
+              }
+            );
+
+            const treePaths: string[] = Array.isArray(treeRes.data?.tree)
+              ? treeRes.data.tree.map((t: any) => (t.path || '').toLowerCase())
+              : [];
+
+            hasTests = treePaths.some(
+              (p) =>
+                p.includes('__tests__') ||
+                p.includes('/test/') ||
+                p.startsWith('test/') ||
+                p.includes('.spec.') ||
+                p.includes('.test.') ||
+                p.includes('pytest')
+            );
+
+            hasCiCd = treePaths.some(
+              (p) =>
+                p.includes('.github/workflows') ||
+                p.includes('render.yaml') ||
+                p.includes('vercel.json') ||
+                p.includes('fly.toml') ||
+                p.includes('jenkins')
+            );
+
+            hasDocker = treePaths.some(
+              (p) => p.includes('dockerfile') || p.includes('docker-compose') || p.includes('.dockerignore')
+            );
+
+            hasBackendDepth = treePaths.some(
+              (p) =>
+                p.includes('prisma') ||
+                p.includes('migration') ||
+                p.includes('graphql') ||
+                p.includes('redis') ||
+                p.includes('socket.io') ||
+                p.includes('alembic') ||
+                p.includes('onnx') ||
+                p.includes('model.pt')
+            );
+          } catch {
+            // Fallback to repository topics and metadata signals
+            hasTests = metaText.includes('test') || metaText.includes('jest') || metaText.includes('pytest');
+            hasCiCd = metaText.includes('ci/cd') || metaText.includes('pipeline') || metaText.includes('workflow');
+            hasDocker = metaText.includes('docker') || metaText.includes('kubernetes') || metaText.includes('container');
+            hasBackendDepth =
+              metaText.includes('api') ||
+              metaText.includes('backend') ||
+              metaText.includes('postgres') ||
+              metaText.includes('redis') ||
+              metaText.includes('graphql') ||
+              metaText.includes('microservice');
+          }
+
+          if (hasTests) signals.push('Automated Tests');
+          if (hasCiCd) signals.push('CI/CD Pipeline');
+          if (hasDocker) signals.push('Docker / Containerized');
+          if (hasBackendDepth) signals.push('Database / Distributed Architecture');
+
+          const commitCount = repo.open_issues_count
+            ? repo.open_issues_count * commitEstimates.openIssueMultiplier + commitEstimates.openIssueBase
+            : commitEstimates.defaultFallback;
+
+          // Compute difficulty score (1.0 - 10.0)
+          let difficultyScore = 3.0; // Base score
+          if (hasTests) difficultyScore += 1.8;
+          if (hasCiCd) difficultyScore += 1.5;
+          if (hasDocker) difficultyScore += 1.4;
+          if (hasBackendDepth) difficultyScore += 1.5;
+          if (commitCount > 50) difficultyScore += 0.8;
+          if (repo.stargazers_count > 5) difficultyScore += 0.6;
+          if (repo.forks_count > 2) difficultyScore += 0.4;
+          difficultyScore = Math.min(10.0, Math.round(difficultyScore * 10) / 10);
+
+          // Categorize Architecture Tier
+          let architectureTier: 'Basic CRUD' | 'Full-Stack Production' | 'Advanced System' = 'Basic CRUD';
+          if (difficultyScore >= 7.5 || (hasCiCd && hasTests && hasBackendDepth)) {
+            architectureTier = 'Advanced System';
+          } else if (difficultyScore >= 5.0 || hasBackendDepth || hasTests || hasDocker) {
+            architectureTier = 'Full-Stack Production';
+          }
+
+          return {
+            name: repo.name,
+            description: repo.description || 'Public GitHub Repository',
+            repoUrl: repo.html_url,
+            stars: repo.stargazers_count || 0,
+            forks: repo.forks_count || 0,
+            language: repo.language || 'Unknown',
+            commitCount,
+            sizeKb: repo.size || 0,
+            hasTests,
+            hasCiCd,
+            hasDocker,
+            architectureTier,
+            difficultyScore,
+            signals,
+          };
+        })
+      );
 
       const normalizedData: NormalizedDevStats = {
         totalRepos: user.public_repos !== undefined ? user.public_repos : repos.length,
@@ -138,45 +243,15 @@ export class GitHubConnector extends ProfileConnector<NormalizedDevStats> {
         isPublicDataOnly: true,
       };
     } catch (err: any) {
-      // Fallback for offline or rate-limited API calls (deterministic, no random math)
-      return {
-        success: true,
-        platform: this.platform,
-        rawProfileUrl: profileUrl,
-        data: {
-          totalRepos: 6,
-          publicRepos: 6,
-          totalStars: 14,
-          totalForks: 5,
-          totalCommits: 145,
-          prCount: 8,
-          issueCount: 3,
-          languages: { TypeScript: 4, Python: 2, Java: 2, 'C++': 1 },
-          topRepos: [
-            {
-              name: 'campus-connect-microservices',
-              description: 'Spring Boot & React platform for student peer tutoring',
-              repoUrl: `https://github.com/${username}/campus-connect-microservices`,
-              stars: 8,
-              forks: 3,
-              language: 'Java',
-              commitCount: 54,
-            },
-            {
-              name: 'algo-visualizer-v2',
-              description: 'Interactive graph and tree algorithm solver with step debugging',
-              repoUrl: `https://github.com/${username}/algo-visualizer-v2`,
-              stars: 6,
-              forks: 2,
-              language: 'TypeScript',
-              commitCount: 38,
-            },
-          ],
-        },
-        error: err.response?.status === 403 ? 'GitHub API rate limit hit. Used public cached profile snapshot.' : undefined,
-        isPublicDataOnly: true,
-      };
+      if (err instanceof ConnectorError) throw err;
+      const statusCode = err.response?.status;
+      const isRateLimit = statusCode === 403 || statusCode === 429;
+      throw new ConnectorError(
+        isRateLimit ? 'GitHub API rate limit exceeded' : (err.message || 'Failed to fetch GitHub profile telemetry'),
+        this.platform,
+        statusCode,
+        isRateLimit
+      );
     }
   }
 }
-

@@ -22,6 +22,10 @@ export class AgentService {
     return await agentMemoryService.getRecentSessions(studentProfileId);
   }
 
+  async getChatMessages(studentProfileId: string) {
+    return await agentMemoryService.getMessagesForProfile(studentProfileId);
+  }
+
   async getActivePlan(studentProfileId: string): Promise<LearningPlan | null> {
     return await agentMemoryService.getLatestPlan(studentProfileId);
   }
@@ -35,7 +39,12 @@ export class AgentService {
           data: {
             studentProfileId,
             title: `[Day ${day.day} - ${day.focusArea}] ${task}`,
-            category: day.focusArea.includes('DSA') || day.focusArea.includes('Coding') ? 'Coding' : day.focusArea.includes('Mock') ? 'Mock Interview' : 'Theory',
+            category:
+              day.focusArea.includes('DSA') || day.focusArea.includes('Coding')
+                ? 'Coding'
+                : day.focusArea.includes('Mock')
+                ? 'Mock Interview'
+                : 'Theory',
             priority: day.day <= 3 ? 'HIGH' : 'MEDIUM',
             estimatedHours: Math.max(1, Math.round(day.estimatedHours / day.tasks.length)),
             reason: `Generated from AI Placement Coach ${plan.durationDays}-Day Strategic Plan for ${plan.goal}`,

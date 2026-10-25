@@ -1,28 +1,33 @@
 import axios from 'axios';
+import { PrismaClient } from '@prisma/client';
 import {
   AgentObservation,
   AgentResponse,
   AgentState,
-  ToolCall,
   ToolResult,
 } from './agent.types';
 import { agentToolsRegistry, getAgentToolSpecs } from './agent.tools';
-import { AGENT_SYSTEM_PROMPT } from './agent.prompts';
+import { buildAgentSystemPrompt, buildAgentUserPrompt } from './agent.prompts';
 import { agentMemoryService } from './agent.memory';
+import { aiConfig } from '../config/ai.config';
+import { scoringConfig } from '../config/scoring.config';
 
-const MAX_AGENT_STEPS = 8;
+const prisma = new PrismaClient();
 
 export class AgentExecutor {
-  private groqApiKey = process.env.GROQ_API_KEY || '';
-  private groqApiUrl = process.env.GROQ_API_URL || 'https://api.groq.com/openai/v1/chat/completions';
-  private groqModel = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
+  private apiKey = aiConfig.apiKey;
+  private apiUrl = aiConfig.baseUrl;
+  private model = aiConfig.model;
+  private temperature = aiConfig.temperature;
+  private maxSteps = aiConfig.agentMaxSteps;
+  private timeoutMs = aiConfig.requestTimeoutMs;
 
   async run(studentProfileId: string, userMessage: string): Promise<AgentResponse> {
     const state: AgentState = {
       studentProfileId,
       userMessage,
       currentStep: 0,
-      maxSteps: MAX_AGENT_STEPS,
+      maxSteps: this.maxSteps,
       observations: [],
       decisions: [],
       createdActions: [],
@@ -30,24 +35,87 @@ export class AgentExecutor {
       isComplete: false,
     };
 
-    // 1. Attempt LLM-driven multi-step tool-calling loop if GROQ_API_KEY is available
-    if (this.groqApiKey) {
+    // Pre-fetch live profile, resume, projects, and complexity metrics from Prisma
+    const liveProfile = await prisma.studentProfile.findUnique({
+      where: { id: studentProfileId },
+      include: {
+        user: { select: { name: true, department: true } },
+        resumeProfile: true,
+        skillMetrics: { orderBy: { verifiedDepthScore: 'desc' } },
+        projects: { orderBy: { difficultyScore: 'desc' } },
+        codingProfiles: true,
+        gitHubProfile: true,
+      },
+    });
+
+    state.studentName = liveProfile?.user?.name;
+
+    // 1. Attempt LLM-driven multi-step tool-calling loop if API key is configured
+    if (this.apiKey) {
       try {
-        const response = await this.executeLlmLoop(state);
+        const response = await this.executeLlmLoop(state, liveProfile);
         if (response) return response;
       } catch (err: any) {
         console.warn('LLM Agent loop failed or timed out. Switching to deterministic agent strategy:', err.message);
       }
     }
 
-    // 2. Deterministic Agent Strategy (Robust Fallback that observes, reasons, and acts)
-    return await this.executeDeterministicAgentLoop(state);
+    // 2. Deterministic Agent Strategy
+    return await this.executeDeterministicAgentLoop(state, liveProfile);
   }
 
-  private async executeLlmLoop(state: AgentState): Promise<AgentResponse | null> {
+  private async executeLlmLoop(state: AgentState, profileData: any): Promise<AgentResponse | null> {
+    const resumeProfile = profileData?.resumeProfile
+      ? {
+          experienceSummary: profileData.resumeProfile.experienceSummary,
+          extractedSkills: JSON.parse(profileData.resumeProfile.extractedSkillsJson || '[]'),
+          extractedProjects: JSON.parse(profileData.resumeProfile.extractedProjectsJson || '[]'),
+        }
+      : undefined;
+
+    const skillMetrics = (profileData?.skillMetrics || []).map((sm: any) => ({
+      skillName: sm.skillName,
+      verifiedDepthScore: sm.verifiedDepthScore,
+      maxProjectDifficulty: sm.maxProjectDifficulty,
+      avgProjectDifficulty: sm.avgProjectDifficulty,
+      evidenceSummary: sm.evidenceSummary,
+    }));
+
+    const projects = (profileData?.projects || []).map((p: any) => ({
+      name: p.name,
+      difficultyScore: p.difficultyScore,
+      architectureTier: p.architectureTier,
+      hasTests: p.hasTests,
+      hasCiCd: p.hasCiCd,
+      hasDocker: p.hasDocker,
+    }));
+
+    const codingProfiles = (profileData?.codingProfiles || []).map((cp: any) => ({
+      platform: cp.platform,
+      totalSolved: cp.totalSolved,
+      contestRating: cp.contestRating,
+    }));
+
+    const systemPrompt = buildAgentSystemPrompt({
+      studentName: profileData?.user?.name,
+      department: profileData?.user?.department,
+      targetRole: profileData?.targetRole,
+      readinessIndex: profileData?.placementReadiness,
+      resumeProfile,
+      skillMetrics,
+      projects,
+      codingProfiles,
+      githubProfile: profileData?.gitHubProfile,
+    });
+
+    const userPrompt = buildAgentUserPrompt(state.userMessage, {
+      studentProfileId: state.studentProfileId,
+      studentName: profileData?.user?.name,
+    });
+
     const messages: any[] = [
-      { role: 'system', content: AGENT_SYSTEM_PROMPT },
-      { role: 'user', content: `Student ID: ${state.studentProfileId}\nStudent Question / Goal: "${state.userMessage}"\n\nPlease inspect the student profile and skill metrics using your authorized tools before answering.` },
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt },
     ];
 
     const toolSpecs = getAgentToolSpecs();
@@ -56,20 +124,20 @@ export class AgentExecutor {
       state.currentStep += 1;
 
       const res = await axios.post(
-        this.groqApiUrl,
+        this.apiUrl,
         {
-          model: this.groqModel,
+          model: this.model,
           messages,
           tools: toolSpecs,
           tool_choice: 'auto',
-          temperature: 0.2,
+          temperature: this.temperature,
         },
         {
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${this.groqApiKey}`,
+            Authorization: `Bearer ${this.apiKey}`,
           },
-          timeout: 12000,
+          timeout: this.timeoutMs,
         }
       );
 
@@ -166,8 +234,8 @@ export class AgentExecutor {
     return null;
   }
 
-  // Deterministic multi-step agent reasoning for offline, rate-limited, or testing environments
-  private async executeDeterministicAgentLoop(state: AgentState): Promise<AgentResponse> {
+  // Deterministic multi-step agent reasoning for offline or test environments
+  private async executeDeterministicAgentLoop(state: AgentState, liveProfile: any): Promise<AgentResponse> {
     // Step 1: Observe student profile
     const profileTool = agentToolsRegistry['get_student_profile'];
     const profileData = await profileTool.execute({}, { studentProfileId: state.studentProfileId, state });
@@ -201,16 +269,16 @@ export class AgentExecutor {
     // Step 4: Check if company mentioned in user message
     let companyData: any = null;
     const lower = state.userMessage.toLowerCase();
-    const companies = ['amazon', 'google', 'microsoft', 'flipkart', 'uber', 'goldman sachs', 'tcs'];
-    const matchedCompany = companies.find((c) => lower.includes(c));
+    const targetCompanies = await prisma.targetCompany.findMany({ select: { name: true } });
+    const matched = targetCompanies.find((c) => lower.includes(c.name.toLowerCase()));
 
-    if (matchedCompany) {
+    if (matched) {
       const compTool = agentToolsRegistry['calculate_company_readiness'];
       try {
-        companyData = await compTool.execute({ companyName: matchedCompany }, { studentProfileId: state.studentProfileId, state });
+        companyData = await compTool.execute({ companyName: matched.name }, { studentProfileId: state.studentProfileId, state });
         state.observations.push({
           step: 4,
-          toolCall: { id: 't4', name: 'calculate_company_readiness', arguments: { companyName: matchedCompany } },
+          toolCall: { id: 't4', name: 'calculate_company_readiness', arguments: { companyName: matched.name } },
           result: { toolCallId: 't4', name: 'calculate_company_readiness', success: true, data: companyData },
           timestamp: new Date().toISOString(),
         });
@@ -229,20 +297,27 @@ export class AgentExecutor {
       timestamp: new Date().toISOString(),
     });
 
-    // Step 6: Reason on lowest skill dimension and create action / plan
+    // Step 6: Reason on lowest skill dimension & project architecture depth
     const dsa = skillData.dsaScore;
     const dev = skillData.devScore;
     const dbms = skillData.dbmsScore;
-    const os = skillData.osScore;
     const pri = skillData.placementReadinessIndex;
+
+    const highestDepthSkill = liveProfile?.skillMetrics?.[0]?.skillName || 'DSA';
+    const lowestDepthSkill = liveProfile?.skillMetrics && liveProfile.skillMetrics.length > 0
+      ? liveProfile.skillMetrics[liveProfile.skillMetrics.length - 1].skillName
+      : null;
 
     let primaryFocus = 'DBMS & SQL';
     let focusReason = `Your DBMS score (${dbms}/100) is your highest-impact growth area compared to DSA (${dsa}/100).`;
 
-    if (dev < dsa - 15) {
+    if (lowestDepthSkill && liveProfile.skillMetrics[liveProfile.skillMetrics.length - 1].verifiedDepthScore < 60) {
+      primaryFocus = lowestDepthSkill;
+      focusReason = `Your verified depth in ${lowestDepthSkill} is currently ${liveProfile.skillMetrics[liveProfile.skillMetrics.length - 1].verifiedDepthScore}/100. Elevating architectural complexity will boost your placement index.`;
+    } else if (dev < dsa - 15) {
       primaryFocus = 'Development & Projects';
       focusReason = `Your Development score (${dev}/100) lags behind your algorithmic foundation (${dsa}/100). Expand GitHub repository depth.`;
-    } else if (dsa < 65) {
+    } else if (dsa < scoringConfig.companyReadiness.thresholds.moderate) {
       primaryFocus = 'Data Structures & Algorithms';
       focusReason = `Elevating DSA from ${dsa}/100 is essential for passing technical screening rounds.`;
     } else if (companyData && companyData.missingSkills?.length > 0) {
@@ -252,9 +327,9 @@ export class AgentExecutor {
 
     // Step 7: Act - Create structured learning plan
     const planTool = agentToolsRegistry['create_learning_plan'];
-    const createdPlan = await planTool.execute(
+    await planTool.execute(
       {
-        goal: `Elevate Placement Readiness Index from ${pri} to ${Math.min(95, pri + 10)}`,
+        goal: `Elevate Placement Readiness Index from ${pri} to ${Math.min(100, pri + 10)}`,
         durationDays: 7,
         priorities: [
           { skill: primaryFocus, priority: 'HIGH', reason: focusReason },
@@ -274,7 +349,7 @@ export class AgentExecutor {
           'Complete 1 timed mock technical round',
           'Synchronize fresh telemetry to reflect progress',
         ],
-        expectedOutcome: `Increase verified readiness index to ${Math.min(95, pri + 10)}/100 for campus placement drives.`,
+        expectedOutcome: `Increase verified readiness index to ${Math.min(100, pri + 10)}/100 for campus placement drives.`,
       },
       { studentProfileId: state.studentProfileId, state }
     );
@@ -292,7 +367,6 @@ export class AgentExecutor {
       { studentProfileId: state.studentProfileId, state }
     );
 
-    // Compose final structured message
     const message = `
 ### 🎯 Placement Coach Strategic Assessment
 

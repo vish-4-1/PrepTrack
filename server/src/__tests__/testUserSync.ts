@@ -1,21 +1,28 @@
-import axios from 'axios';
 import { normalizerService } from '../services/normalizer.service';
 import { skillEngineService } from '../services/skillEngine.service';
 import { grokService } from '../services/grok.service';
 
-async function testSyncVishal() {
-  const username = 'vishaldevikumar';
-  const email = 'vishaldevikumar@gmail.com';
+async function testSyncProfile() {
+  const targetUsername = process.env.TEST_USERNAME || process.argv[2];
+
+  if (!targetUsername) {
+    console.error('\n[Error] Missing target username parameter.');
+    console.log('Usage: npx ts-node src/__tests__/testUserSync.ts <target_username>');
+    console.log('   or: TEST_USERNAME=<target_username> npx ts-node src/__tests__/testUserSync.ts\n');
+    process.exit(1);
+  }
+
+  const email = `${targetUsername}@test.university.edu`;
   console.log(`\n======================================================`);
-  console.log(`Testing Public Telemetry Sync for user: ${email} (${username})`);
+  console.log(`Testing Public Telemetry Sync for user: ${email} (${targetUsername})`);
   console.log(`======================================================\n`);
 
   const urls = {
-    GITHUB: `https://github.com/${username}`,
-    LEETCODE: `https://leetcode.com/${username}`,
-    CODECHEF: `https://codechef.com/users/${username}`,
-    HACKERRANK: `https://hackerrank.com/profile/${username}`,
-    LINKEDIN: `https://linkedin.com/in/${username}`,
+    GITHUB: `https://github.com/${targetUsername}`,
+    LEETCODE: `https://leetcode.com/${targetUsername}`,
+    CODECHEF: `https://codechef.com/users/${targetUsername}`,
+    HACKERRANK: `https://hackerrank.com/profile/${targetUsername}`,
+    LINKEDIN: `https://linkedin.com/in/${targetUsername}`,
   };
 
   const codingStatsList: any[] = [];
@@ -36,7 +43,6 @@ async function testSyncVishal() {
           codingStatsList.push(cData);
           console.log(`${platform} Solved: ${cData.totalSolved}, Rating: ${cData.contestRating}`);
         }
-
       }
     } catch (err: any) {
       console.log(`Platform ${platform} notice:`, err.message);
@@ -49,18 +55,17 @@ async function testSyncVishal() {
   });
 
   console.log(`\n------------------------------------------------------`);
-  console.log(`Placement Readiness Index for Vishal: ${calculated.overallReadinessIndex}/100`);
+  console.log(`Placement Readiness Index for ${targetUsername}: ${calculated.overallReadinessIndex}/100`);
   console.log(`DSA Score: ${calculated.dsaScore}/100`);
   console.log(`Dev Score: ${calculated.devScore}/100`);
   console.log(`DBMS Score: ${calculated.dbmsScore}/100`);
   console.log(`OS Score: ${calculated.osScore}/100`);
   console.log(`------------------------------------------------------\n`);
 
-  // Run Groq AI Telemetry Reasoning with live API key!
   const normalizedProfileForGroq: any = {
     identity: {
-      name: 'Vishal Devikumar',
-      username,
+      name: targetUsername,
+      username: targetUsername,
       email,
       department: 'Computer Science & Engineering',
     },
@@ -69,14 +74,14 @@ async function testSyncVishal() {
       combinedContestRatingMax: codingStatsList.reduce((max, c) => Math.max(max, c.contestRating || 0), 0),
     },
     development: devStats || {
-      totalRepos: 12,
-      publicRepos: 12,
-      totalStars: 15,
-      totalForks: 4,
-      totalCommits: 280,
-      prCount: 14,
-      issueCount: 5,
-      languages: { Python: 5, JavaScript: 4, CPlusPlus: 3 },
+      totalRepos: 0,
+      publicRepos: 0,
+      totalStars: 0,
+      totalForks: 0,
+      totalCommits: 0,
+      prCount: 0,
+      issueCount: 0,
+      languages: {},
       topRepos: [],
     },
     skills: Object.entries(calculated.breakdown).map(([name, val]) => ({
@@ -88,11 +93,11 @@ async function testSyncVishal() {
     placementReadinessIndex: calculated.overallReadinessIndex,
   };
 
-  console.log('Sending Telemetry to Groq Cloud API (llama-3.3-70b-versatile)...');
+  console.log('Sending Telemetry to Configured LLM API...');
   const aiAnalysis = await grokService.analyzeProfile(normalizedProfileForGroq, 'Amazon');
 
   console.log('\n======================================================');
-  console.log('GROQ LIVE ANALYSIS FOR VISHAL DEVIKUMAR');
+  console.log(`LIVE ANALYSIS FOR ${targetUsername.toUpperCase()}`);
   console.log('======================================================');
   console.log('Executive Summary:\n', aiAnalysis.summary);
   console.log('\nKey Strengths:\n', aiAnalysis.strengths);
@@ -102,4 +107,4 @@ async function testSyncVishal() {
   console.log('======================================================\n');
 }
 
-testSyncVishal().catch(console.error);
+testSyncProfile().catch(console.error);
